@@ -5,11 +5,10 @@
 # This code reproduces the analysis described under the subheading "Model Fitting" in the Methods section of the manuscript.
 
 # Script created by QDR, 4 October 2018
-# Script last modified by QDR, 4 October 2018
-# Code last tested (with reduced number of iterations) by QDR, 4 October 2018
+# Script last modified by QDR, 9 October 2018
+# Code last tested (with reduced number of iterations) by QDR, 9 October 2018
 # Tested under R version 3.5.1, brms version 2.5.0
 # Contact: qread@sesync.org
-
 
 # Define model fitting function -------------------------------------------
 
@@ -275,7 +274,7 @@ for (i in 1:n_fits) {
     mutate_at(vars(starts_with('RMSE')), funs(relative = ./range_obs))
   
   # Bayesian R-squared
-  model_r2 <- cbind(model_table[i, 1:3], response = resp_names, bayes_R2(fit$model))
+  model_r2 <- cbind(model_table[i, 1:2], ecoregion = 'TNC', model = model_table[i, 3], response = resp_names, bayes_R2(fit$model))
   
   model_stats[[i]] <- list(coef = model_coef, pred = model_pred, rmse = model_rmse, r2 = model_r2)
   
@@ -326,4 +325,34 @@ for (i in 1:n_fits) {
 }
 
 model_kfold_stats <- map2_dfr(model_kfold_stats, 1:n_fits, function(x, y) cbind(taxon = model_table$taxon[y], rv = model_table$rv[y], ecoregion = 'TNC', model = model_table$model[y], as.data.frame(x)))
+
+
+# Calculate spatial variation in coefficients -----------------------------
+
+coef_diff <- function(x) {
+  coefdiff <- as.matrix(dist(x$value)) # pairwise difference among coefficients
+  dimnames(coefdiff) <- list(x$region, x$region) # give region names
+  tnc_index <- match(x$region, dimnames(tnc_bin)[[1]]) # subset the TNC matrix by the 
+  tnc_used <- tnc_bin[tnc_index, tnc_index]
+  
+  # Get only the entries that are neighbors and in the upper triangle of the matrix.
+  coefdiff[tnc_used == 0 | lower.tri(coefdiff)] <- NA
+  data.frame(coef_var = mean(na.omit(as.numeric(coefdiff))))
+}
+
+model_coef_var <- model_coef %>%
+  filter(model == 'full', effect == 'coefficient', stat == 'Estimate') %>%
+  group_by(taxon, response, parameter) %>%
+  do(coef_diff(.)) %>%
+  ungroup
+
+
+# Write model fit summaries to CSVs ---------------------------------------
+
+write.csv(model_coef, 'model_coef.csv', row.names = FALSE)                 # Coefficient estimates and credible intervals
+write.csv(model_pred, 'model_pred.csv', row.names = FALSE)                 # Fitted values and credible intervals    
+write.csv(model_rmse, 'model_rmse.csv', row.names = FALSE)                 # Root mean squared errors for models fit to full dataset
+write.csv(model_r2, 'model_r2.csv', row.names = FALSE)                     # Bayesian R-squared values for models
+write.csv(model_kfold_stats, 'model_kfold_stats.csv', row.names = FALSE)   # Root mean squared errors for models fit to cross-validation datasets
+write.csv(model_coef_var, 'model_coef_var.csv', row.names = FALSE)         # Spatial variation in model coefficients by ecoregion
 
