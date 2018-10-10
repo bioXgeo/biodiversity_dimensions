@@ -1,0 +1,40 @@
+---
+title: "Biodiversity and Geodiversity Data Processing"
+author: "Quentin D. Read"
+date: "October 10, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data
+
+The data are provided in this repository so that anyone can reproduce this data processing pipeline. The datasets are not included in a completely raw form--they have had some initial processing done on them. This was necessary because (1) to be able to store all needed datasets on the repository, I needed to create a small manageable subset of all the datasets and (2) because I did not think it was necessary to include all initial processing steps for the BBS route coordinates, bird and tree phylogenetic trees, bird and tree functional trait matrices, and species lookup tables. See below for details. I would be happy to answer any questions about how those datasets were generated.
+
+## Geodiversity
+
+The geodiversity datasets included here are:
+
+* Bioclim variables as a multiband .tif with 19 layers, generated from MODIS temperature and CHIRPS precipitation data and produced at a 1-km resolution.
+* Elevation from the 30-m SRTM digital elevation model resampled to 100-m resolution (the coarsening is just to reduce the file size for this example)
+* Geological age as a discrete categorical variable at 1-km resolution.
+
+All these layers cover the state of New Hampshire with a 100-km buffer on all sides.
+
+## Bird biodiversity
+
+The bird biodiversity datasets included here are:
+
+* Raw data from the BBS survey. This dataset was produced by downloading raw data from USGS and subsetting by creating a 100-km buffer around the state of New Hampshire and including all routes whose midpoints fall within that buffer.
+* BBS route midpoint coordinates. Any BBS routes that do not have an unambiguous midpoint have already been excluded (routes with multiple discontinuous segments or three-way intersections along the route)
+* Phylogenetic tree for all bird species in BBS survey. This was produced by downloading 1000 phylogenies from the posterior distribution of phylogenies for all birds in the world from birdtree.org, selecting only the species found in BBS, and calculating the consensus tree from the 1000 individual trees.
+* Functional trait matrix for all bird species in BBS survey. This was produced by taking two trait databases, joining them, and imputing any missing values using phylogenetic imputation.
+* Species lookup table. This has columns that cross-reference the AOU codes in BBS survey with the species names from the phylogeny and from the trait matrix.
+
+## Tree biodiversity
+
+The tree biodiversity datasets included here are:
+
+* Raw data from the FIA survey. This was produced by querying the FIA database for all individual tree records from the most recent year of measurement in the continental USA, subsetting by creating a 100-km buffer around the state of New Hampshire and including all plots falling within that buffer, then removing all plots categorized as plantation forest. The categorization as plantation was taken from the COND database in FIA. This dataset includes "fuzzed and swapped" latitude and longitude coordinates for the FIA locations. In our analysis, we use the true locations but for this example we use the fuzzed locations because of confidentiality concerns.
