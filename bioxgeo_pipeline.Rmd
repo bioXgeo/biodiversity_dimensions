@@ -29,7 +29,7 @@ The bird biodiversity datasets included here are:
 
 * Raw data from the BBS survey. This dataset was produced by downloading raw data from USGS and subsetting by creating a 100-km buffer around the state of New Hampshire and including all routes whose midpoints fall within that buffer.
 * BBS route midpoint coordinates. Any BBS routes that do not have an unambiguous midpoint have already been excluded (routes with multiple discontinuous segments or three-way intersections along the route)
-* Phylogenetic tree for all bird species in BBS survey. This was produced by downloading 1000 phylogenies from the posterior distribution of phylogenies for all birds in the world from birdtree.org, selecting only the species found in BBS, and calculating the consensus tree from the 1000 individual trees.
+* Phylogenetic tree for all bird species in BBS survey (contiguous USA). This was produced by downloading 1000 phylogenies from the posterior distribution of phylogenies for all birds in the world from birdtree.org, selecting only the species found in BBS, and calculating the consensus tree from the 1000 individual trees.
 * Functional trait matrix for all bird species in BBS survey. This was produced by taking two trait databases, joining them, and imputing any missing values using phylogenetic imputation.
 * Species lookup table. This has columns that cross-reference the AOU codes in BBS survey with the species names from the phylogeny and from the trait matrix.
 
@@ -37,4 +37,150 @@ The bird biodiversity datasets included here are:
 
 The tree biodiversity datasets included here are:
 
-* Raw data from the FIA survey. This was produced by querying the FIA database for all individual tree records from the most recent year of measurement in the continental USA, subsetting by creating a 100-km buffer around the state of New Hampshire and including all plots falling within that buffer, then removing all plots categorized as plantation forest. The categorization as plantation was taken from the COND database in FIA. This dataset includes "fuzzed and swapped" latitude and longitude coordinates for the FIA locations. In our analysis, we use the true locations but for this example we use the fuzzed locations because of confidentiality concerns.
+* Raw data from the FIA survey. This was produced by querying the FIA database for all individual tree records from the most recent year of measurement in the contiguous USA, subsetting by creating a 100-km buffer around the state of New Hampshire and including all plots falling within that buffer, then removing all plots categorized as plantation forest. The categorization as plantation was taken from the COND database in FIA. This dataset includes "fuzzed and swapped" latitude and longitude coordinates for the FIA locations. In our analysis, we use the true locations but for this example we use the fuzzed locations because of confidentiality concerns.
+* Phylogenetic tree for all tree species in FIA survey (contiguous USA). This was assembled by Kevin Potter (cite).
+* Functional trait matrix for all tree species in FIA survey (contiguous USA). 
+* Species lookup table. This has columns that cross-refernce the species codes in FIA survey with the species names from the phylogeny and from the trait matrix.
+
+# Processing pipeline
+
+The processing pipeline is mainly implemented in R. However for a number of the spatial data processing tasks, it is too cumbersome to load large raster data layers into memory. For this reason, some of the spatial data processing is done with GDAL. Originally we ran this code on a high-performance computing cluster. We called the GDAL functions using the `system2()` command from within R.
+
+# Geodiversity processing and calculation
+
+To get geodiversity metrics for each of the layers at each of the locations where we have biodiversity (community) data, we extract pixel values from circles of different radii around the point, then calculate the metrics from those values. 
+
+## Rescaling rasters
+
+First we rescale the rasters so that we can calculate the metrics both in the native resolution of each raster and in a standardized resolution corresponding to the coarsest resolution we have (5 km pixel size). 
+
+```{r}
+gdalwarp_args <- paste("-t srs",
+                       "'+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +ellps=GRS80 +towgs84=0,0,0'",
+                       "-tr 5000 5000")
+
+system2(command = 'gdalwarp', args = paste(gdalwarp_args, "dem100m_NH.tif", "dem5k_NH.tif"))
+system2(command = 'gdalwarp', args = paste(gdalwarp_args, "bioclim1k_NH.tif", "bioclim5k_NH.tif"))
+system2(command = 'gdalwarp', args = paste(gdalwarp_args, "GEA_NH.tif", "GEA5k_NH.tif"))
+
+```
+
+## Topographic indices
+
+Next, we generate three new layers from each layer: terrain ruggedness index (TRI), roughness, and topographic position index (TPI). Each pixel in these three new layers is the TRI/roughness/TPI of a 3x3 pixel window. 
+
+```{r}
+
+```
+
+## Extracting values within a given distance of each point
+
+Next, we create a `.vrt` file (virtual raster) from each of the `.tif` raster image files. In order to reproduce our entire workflow, it is necessary to do this because the large number of extractions can only really be done in parallel. The virtual rasters support parallel read operations.
+
+```{r}
+
+```
+
+
+Now, for each layer-radius combination, we extract all pixel values within the circle of that radius around each of the biodiversity locations. We calculate the mean, maximum, minimum, and standard deviation of those pixel values. If the raster layer is thematic (categorical), we do not calculate the topographic indices. We calculate the mode and the diversity (Shannon entropy) of the pixel values.
+
+
+```{r}
+
+```
+
+
+# Biodiversity processing and calculation
+
+For each BBS route and FIA plot, first we find the plot/route identifiers for all the plots/routes within a radius of the focal plot. We calculate alpha, beta, and gamma diversity for that group of communities, for each of the dimensions (taxonomic, functional, and phylogenetic). Thus there are 9 types of diversity for each community for each radius. We define alpha-diversity as the average diversity of communities within the radius, beta-diversity as the average pairwise dissimilarity among all pairs of communities within the radius, and gamma-diversity as the diversity of all surveyed individuals within the radius pooled as a single community.
+
+## Birds: processing
+
+Data from BBS are provided in this format: each row corresponds to one taxon-route combination. There are columns to identify the route by a unique identifier, the country, state, and route within the state, and the `RPID` column identifies the type of route observation protocol (whether it was the standard protocol or some other protocol). There is a column for year and a column for the unique AOU taxon identifier. The next 50 columns give counts of the number of times that taxon was observed at each of the 50 stops along the route in that year.
+
+We exclude all routes not surveyed with the standard protocol then reshape the data so that each row corresponds to a single stop on a single route in a single year, with columns for the abundance of each taxon. This enables us to pool taxon presences across stops within a route and across years within a route.
+
+```{r}
+bbs <- read.csv('bbs_data.csv')
+
+# Create single route identifier and remove nonstandard protocol observations.
+bbs <- bbs %>% 
+  mutate(rteNo = as.character(1000 * statenum + Route)) %>%
+  filter(RPID == 101)
+
+# Reshape to site-by-species matrix,
+# where site is a year-route combination.
+bbs_matrix <- bbs %>%
+  melt(id.vars = grep('Stop', names(bbs), invert=TRUE), 
+       variable.name = 'Stop', 
+       value.name = 'n') %>%
+  dcast(year + rteNo ~ AOU,
+        value.var = 'n',
+        fun.aggregate = sum)
+
+```
+
+The next step is to do some data cleaning. The BBS survey protocol makes some taxonomic distinctions below the level of species that are not captured in our phylogeny or trait dataset. We need to lump these together. In addition, there are a few identifiers for individuals that could only be narrowed down to two or three species within a genus. We selected a random species from those two or three for each of the ambiguous individuals. This is not recommended for detailed analyses of individual species' trends in abundance over time, but is acceptable for our coarse-scale analysis of phylogenetic and functional diversity. We consolidate the matrix columns corresponding to the lumped species and ambiguous taxa. All of this data cleaning is done with the help of a lookup table that we put together by manually looking up all the ambiguous cases.
+
+```{r}
+
+```
+
+We convert the site-by-species matrix to a presence-only matrix, since the number of times a species was observed on a route is only moderately correlated to the abundance of that species. Next, we pool occurrences across the ten years in our sample dataset to a single binary value indicating whether the species was ever observed at that route.
+
+```{r}
+
+```
+
+
+Next, we load our phylogenetic tree and functional trait information for birds, make sure they are properly cross-referenced with the taxonomic information from the BBS survey, and calculate pairwise functional and phylogenetic distance matrices for all possible pairs of species in our dataset. These will be used for functional and phylogenetic diversity metric calculations. Note: the trait matrix includes a column for nocturnal status. We use this column to exclude nocturnal species from all further analysis since the BBS survey protocol poorly captures nocturnal species (routes are surveyed during the daytime).
+
+```{r}
+
+```
+
+## Trees: processing
+
+The tree biodiversity data we obtained from the US Forest Service is the result of a query from a SQL database. In this dataset, each row represents a single tree individual at its most recent year of measurement, which ranges from 2011-2016 at the time we acquired the data. There are a large number of columns with observed and modeled information about the tree, but the most important ones for our purposes are the species code `SPCD`, the status code `STATUSCD`, and the diameter at breast height `DIA`. We did not use abundance-weighted diversity metrics in our paper, but often community ecologists use basal area, derived from the dbh measurement as a proxy for species abundance.
+
+**Important**: Please note that for this reproducible example, we are using the fuzzed and swapped geographic locations for FIA plots, which is necessary to ensure confidentiality. Anyone wishing to use the true locations for analysis needs to file for approval with the U.S. Forest Service. The fuzzing/swapping algorithm first moves the location of each plot randomly within a few hundred meters, then randomly swaps the tree inventories of around 10% of the plots with a nearby plot of the same forest type. This is fine for demonstration purposes but obviously means that both the biodiversity and geodiversity metrics calculated in this example are slightly inaccurate.
+
+The first step is to reshape the data frame into a site-by-species matrix, as we did above with birds. In the process we remove all trees without a status code of 1 (alive) and calculate the basal area, in square meters, as a proxy for abundance. Here, we also pool the four subplots of each plot together, by ignoring the `SUBP` column as a grouping variable.
+
+```{r}
+fia_matrix <- fia %>%
+  filter(STATUSCD == 1) %>%
+  mutate(PLT_CN = as.character(PLT_CN),
+         basalarea = pi * (0.5 * DIA/100) ^ 2) %>%
+  dcast(STATECD + PLT_CN ~ SPCD,
+        value.var = 'basalarea',
+        fun.aggregate = sum)
+```
+
+Next we load our lookup table that has the key to resolve all the discrepancies between the survey data, the phylogenetic tree, and the functional trait dataset. We use this to do some data cleaning, assigning corrected species codes to FIA taxa that point to more than one species in the phylogeny or trait matrix.
+
+```{r}
+
+```
+
+We load the phylogenetic tree and functional trait distance matrix and calculate pairwise phylogenetic and functional distances between all possible pairs of species in our dataset. Again this is needed for the distance-based diversity metrics we'll calculate later.
+
+```{r}
+
+```
+
+
+## Birds and trees: calculating diversity metrics
+
+Once we process the biodiversity data into a similar format for both birds and trees, we can apply the same functions to find diversity metrics to both the bird and tree biodiversity datasets.
+
+We need pairwise distances from each FIA plot to all other plots, so that we can determine each plot's neighbors within the radius. This can be done pretty quickly for all the plots, although if there were too many more, we would probably have to use a cleverer method to find the neighbors.
+
+```{r}
+
+```
+
+Next we define the function for calculating the biodiversity metrics. The function takes many arguments as input. You can specify which type of diversity you are calculating, both the level (alpha, beta, or gamma) and the dimension (taxonomic, phylogenetic, or functional). 
+
+# Sampling subsets of data for model fitting
+
