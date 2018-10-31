@@ -276,7 +276,22 @@ for (i in 1:n_fits) {
   # Bayesian R-squared
   model_r2 <- cbind(model_table[i, 1:2], ecoregion = 'TNC', model = model_table[i, 3], response = resp_names, bayes_R2(fit$model))
   
-  model_stats[[i]] <- list(coef = model_coef, pred = model_pred, rmse = model_rmse, r2 = model_r2)
+  # Spatial variation in coefficients across regions
+  model_coef_var <- summary(fit$model)$random$region[, c('Estimate', 'l-95% CI', 'u-95% CI')]
+  dimnames(model_coef_var)[[2]] <-  c('Estimate', 'q025', 'q975')
+  
+  # Parse names in the spatial variation data frame to match the other names.
+  parse_names <- function(ns) {
+    ns <- map_chr(strsplit(ns, '\\(|\\)'), 2) # get rid of parentheses around name
+    response <- unlist(regmatches(ns, gregexpr('^[^_]*', ns)))
+    parameter <- unlist(regmatches(ns, gregexpr('_.*$', ns)))
+    parameter <- substr(parameter, 2, nchar(parameter))
+    return(data.frame(response = response, parameter = parameter))
+  }
+  
+  model_coef_var <- cbind(parse_names(dimnames(model_coef_var)[[1]]), model_coef_var)
+  
+  model_stats[[i]] <- list(coef = model_coef, pred = model_pred, rmse = model_rmse, r2 = model_r2, coef_var = model_coef_var)
   
 }
 
@@ -284,6 +299,7 @@ model_coef <- map2_dfr(model_stats, 1:n_fits, function(x, y) cbind(taxon = model
 model_pred <- map2_dfr(model_stats, 1:n_fits, function(x, y) cbind(taxon = model_table$taxon[y], rv = model_table$rv[y], ecoregion = 'TNC', model = model_table$model[y], as.data.frame(x$pred)))
 model_rmse <- map2_dfr(model_stats, 1:n_fits, function(x, y) cbind(taxon = model_table$taxon[y], rv = model_table$rv[y], ecoregion = 'TNC', model = model_table$model[y], as.data.frame(x$rmse)))
 model_r2 <- map_dfr(model_stats, 'r2')
+model_coef_var <- map2_dfr(model_stats, 1:n_fits, function(x, y) cbind(taxon = model_table$taxon[y], rv = model_table$rv[y], ecoregion = 'TNC', model = model_table$model[y], as.data.frame(x$coef_var)))
 
 # Extract summary information from cross-validation objects ---------------
 
@@ -325,26 +341,6 @@ for (i in 1:n_fits) {
 }
 
 model_kfold_stats <- map2_dfr(model_kfold_stats, 1:n_fits, function(x, y) cbind(taxon = model_table$taxon[y], rv = model_table$rv[y], ecoregion = 'TNC', model = model_table$model[y], as.data.frame(x)))
-
-
-# Calculate spatial variation in coefficients -----------------------------
-
-coef_diff <- function(x) {
-  coefdiff <- as.matrix(dist(x$value)) # pairwise difference among coefficients
-  dimnames(coefdiff) <- list(x$region, x$region) # give region names
-  tnc_index <- match(x$region, dimnames(tnc_bin)[[1]]) # subset the TNC matrix by the 
-  tnc_used <- tnc_bin[tnc_index, tnc_index]
-  
-  # Get only the entries that are neighbors and in the upper triangle of the matrix.
-  coefdiff[tnc_used == 0 | lower.tri(coefdiff)] <- NA
-  data.frame(coef_var = mean(na.omit(as.numeric(coefdiff))))
-}
-
-model_coef_var <- model_coef %>%
-  filter(model == 'full', effect == 'coefficient', stat == 'Estimate') %>%
-  group_by(taxon, response, parameter) %>%
-  do(coef_diff(.)) %>%
-  ungroup
 
 
 # Write model fit summaries to CSVs ---------------------------------------
