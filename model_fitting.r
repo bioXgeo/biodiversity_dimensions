@@ -7,7 +7,7 @@
 
 # Script created by QDR, 4 October 2018
 # Script last modified by QDR, 20 May 2019 (analysis revised based on initial review from Global Ecology and Biogeography)
-# Code last tested (with reduced number of iterations) by QDR, 9 October 2018
+# Code last tested (with reduced number of iterations) by QDR, 20 May 2019
 # Tested under R version 3.5.1, brms version 2.5.0
 # Contact: qread@sesync.org
 
@@ -55,7 +55,7 @@ fit_mv_mm <- function(pred_df, resp_df, pred_vars, resp_vars, id_var, region_var
   # Added 1 May 2019: Change any missing data rows to NA
   if (missing_data) {
 	dat <- dat %>% left_join(missing_df)
-	dat[dat$missing, rv] <- NA
+	dat[dat$missing, resp_vars] <- NA
   }
   
   # Added 2 May 2018: get rid of any region that has less than 5 sites.
@@ -136,15 +136,13 @@ get_relative_rmse <- function(fit, resp_var_names, predicted_values) {
 
 # get_kfold_rmse(): function to get k-fold relative root mean squared error for each model
 get_kfold_rmse <- function(fit_ids, K) {
-	fit_folds <- map(fit_ids[-1], function(i) {
-		load(file.path(fp, paste0('fit', i, '.RData')))
-		fit
-	})
+  fit_folds <- model_fits[fit_ids[-1]]
+
 	resp_names <- get_correct_variable_names(fit_folds[[1]])
 	
 	# Load full fit so we can get the data out
-	load(file.path(fp, paste0('fit', fit_ids[1], '.RData')))
-	
+	fit <- model_fits[[fit_ids[1]]]
+
 	pred_folds_raw <- map(fit_folds, function(x) {
 		preds <- predict(x$model, summary = FALSE)
 		dimnames(preds)[[3]] <- resp_names
@@ -239,8 +237,8 @@ K <- 63		  # Number of cross-validation folds
 model_table <- expand.grid(taxon = c('fia','bbs'),
                            rv = c('alpha', 'beta', 'gamma'),
                            ecoregion = 'TNC',
-						   model = c('full','climate','space', 'geo'),
-						   fold = 0:K,
+                           model = c('full','climate','space', 'geo'),
+                           fold = 0:K,
                            stringsAsFactors = FALSE)
 
 # Specify predictor and response variable names.
@@ -270,21 +268,22 @@ model_priors <- prior_table %>%
 model_table <- model_table %>% as_tibble %>% left_join(model_priors)
 
 for (i in 1:n_fits) {
-
-  biodat <- switch(model_table$taxon[i], fia = fiageo, bbs = bbsgeo)
-  geodat <- switch(model_table$taxon[i], fia = fiabio, bbs = bbsbio)
+  
+  biodat <- switch(model_table$taxon[i], fia = fiabio, bbs = bbsbio)
+  geodat <- switch(model_table$taxon[i], fia = fiageo, bbs = bbsgeo)
+  siteid <- switch(model_table$taxon[i], fia = 'PLT_CN', bbs = 'rteNo')
   
   if (model_table$fold[i] != 0) {
-	# Join response variable data with the region ID, then set the appropriate values to NA
-	biodat <- biodat %>% left_join(geodat[, c(siteid, 'TNC')])
-	biodat$missing <- biodat$TNC == region_folds[model_table$fold[i]]
+    # Join response variable data with the region ID, then set the appropriate values to NA
+    biodat <- biodat %>% left_join(geodat[, c(siteid, 'TNC')])
+    biodat$missing <- biodat$TNC == region_folds[model_table$fold[i]]
   }
   
-  model_fits[[i]] <- fit_mv_mm(pred_df = biodat, 
-                               resp_df = geodat, 
+  model_fits[[i]] <- fit_mv_mm(pred_df = geodat, 
+                               resp_df = biodat, 
                                pred_vars = switch(model_table$model[i], full = prednames, climate = climate_prednames, geo = geo_prednames, space = character(0)), 
                                resp_vars = switch(model_table$rv[i], alpha = alpha_resp, beta = beta_resp, gamma = gamma_resp), 
-                               id_var = switch(model_table$taxon[i], fia = 'PLT_CN', bbs = 'rteNo'), 
+                               id_var = siteid, 
                                region_var = 'TNC', 
                                distribution = 'gaussian', 
                                adj_matrix = tnc_bin,
@@ -293,8 +292,8 @@ for (i in 1:n_fits) {
                                n_iter = NI,
                                n_warmup = NW,
                                delta = delta,
-							   missing_data = model_table$fold[i] > 0,
-							   exclude_locations = exclude_regions
+                               missing_data = model_table$fold[i] > 0,
+                               exclude_locations = exclude_regions
   )
 }
 
@@ -332,11 +331,11 @@ for (i in 1:n_full_fits) {
   model_rmse <- get_relative_rmse(fit, resp_names, model_pred)
   
   # Bayesian R-squared
-  model_r2 <- cbind(task_table[i, ], response = resp_names, bayes_R2(fit$model))
+  model_r2 <- cbind(model_table[i, c('taxon', 'rv', 'ecoregion', 'model')], response = resp_names, bayes_R2(fit$model))
   
   # Information criterion (WAIC)
   model_waic <- waic(fit$model)
-  model_waic <- cbind(task_table[i, ], WAIC = model_waic$estimates['waic','Estimate'], WAIC_SE = model_waic$estimates['waic','SE'])
+  model_waic <- cbind(model_table[i, c('taxon', 'rv', 'ecoregion', 'model')], WAIC = model_waic$estimates['waic','Estimate'], WAIC_SE = model_waic$estimates['waic','SE'])
   
   # RMSE from K-fold cross validation
   fit_ids <- with(model_table, which(taxon == taxon[i] & rv == rv[i] & model == model[i]))
